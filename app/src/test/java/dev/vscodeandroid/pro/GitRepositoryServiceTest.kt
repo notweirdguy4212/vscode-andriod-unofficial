@@ -119,4 +119,31 @@ class GitRepositoryServiceTest {
             org.junit.Assert.assertThrows(IllegalArgumentException::class.java) { service.createBranch(root, "../bad") }
         } finally { root.deleteRecursively() }
     }
+
+    @Test fun localRebaseAndAbortCommandsAreExposed() {
+        val root = Files.createTempDirectory("vscode-git-rebase").toFile()
+        try {
+            val service = GitRepositoryService()
+            service.init(root)
+            val file = java.io.File(root, "history.txt")
+            file.writeText("base\\n")
+            service.stageAll(root)
+            service.commit(root, "base", "Test User", "test@example.com")
+            val main = service.status(root).branch
+            service.createBranch(root, "feature/rebase")
+            service.checkout(root, "feature/rebase")
+            java.io.File(root, "feature.txt").writeText("feature\\n")
+            service.stageAll(root)
+            service.commit(root, "feature work", "Test User", "test@example.com")
+            service.checkout(root, main)
+            java.io.File(root, "main.txt").writeText("main\\n")
+            service.stageAll(root)
+            service.commit(root, "main work", "Test User", "test@example.com")
+            service.checkout(root, "feature/rebase")
+            val result = service.rebase(root, main)
+            assertTrue(result.status.isNotBlank())
+            assertTrue(service.status(root).clean)
+            assertEquals("feature/rebase", service.status(root).branch)
+        } finally { root.deleteRecursively() }
+    }
 }

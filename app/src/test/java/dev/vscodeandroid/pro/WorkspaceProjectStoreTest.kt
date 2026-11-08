@@ -3,7 +3,7 @@ package dev.vscodeandroid.pro
 import dev.vscodeandroid.pro.workspace.WorkspaceProjectStore
 import org.junit.Assert.*
 import org.junit.Test
-import java.nio.file.Files
+import java.nio.file.Files\nimport java.io.File
 
 class WorkspaceProjectStoreTest {
     @Test fun createsReadsAndListsProjectFiles() {

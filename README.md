@@ -1,8 +1,20 @@
-# VS Code Android Pro — 1.3.0 engineering preview
+# VS Code Android Pro — 1.5.0 engineering preview
 
 An Android Studio / Kotlin / Jetpack Compose coding workbench for phones and tablets.
 
-## 1.3.0 engineering changes
+## 1.5.0 engineering changes
+
+- **LSP protocol:** advertise semantic-token full/range/delta support and workspace configuration/file-operation capabilities; retain server capabilities; track dynamic capability registrations; expose request cancellation with `$/cancelRequest`; add semantic-token request helpers.
+- **Git:** add local rebase, continue and abort operations with explicit conflict gating and structured status results.
+- **Large files:** add a bounded, line-aware workspace page reader (4 KiB–2 MiB page limit) so callers can inspect large files without loading the entire file into memory.
+- **Release pipeline:** advance app version to 1.5.0 and generate an SPDX JSON software bill of materials in CI.
+
+## 1.4.0 engineering changes
+
+- **Workspace file operations:** create nested folders, delete files, move/rename files and folders through the workspace store, and persist edits using same-directory temporary files with fsync and atomic replacement where supported. The Explorer exposes folder creation, refresh and file deletion. The workspace store rejects traversal and moving a folder into its own descendant.
+- **Versioning:** Android application version advanced to 1.4.0 (versionCode 140).
+
+## Retained 1.3.0 engineering changes
 
 - **LSP:** caret-position completion requests with debounce and a selectable completion overlay; diagnostics surfaced in Problems; code-action resolve/execute; formatting; and guarded multi-file `WorkspaceEdit` application. The client advertises completion, diagnostics, code actions, formatting and workspace-edit capabilities.
 - **Project management:** persistent named projects with create, open, rename and delete operations. Each project has an independent app-private workspace; SAF folder import targets the selected project.
@@ -46,3 +58,17 @@ gradle :app:assembleRelease
 - `docs/LANGUAGES.md` — language mode and LSP mapping.
 - `readmes/` — translated documentation from the 1.2.0 baseline.
 - `licenses/` — third-party license notices.
+
+
+## 1.4.0 verification status
+
+This source update is not a production certification. The available build environment did not include Gradle, an Android SDK, or `android.jar`; therefore Android compilation, unit tests, lint, APK assembly, instrumentation, and device/ABI validation were not run. See `docs/PRODUCTION-READINESS-1.4.0.md` for the exact scope and remaining blockers.
+
+
+## 1.5.0 scope and verification caveats
+
+This increment adds protocol and service primitives, not a complete VS Code feature parity layer. Native Sora completion integration and native diagnostic gutter markers still require editor API integration and Android-device verification. Semantic-token requests are exposed, but token delta decoding/rendering is not yet connected to the editor. Dynamic LSP registrations are recorded; the client does not yet implement every registered feature or server request.
+
+Git rebase is local-ref based. SSH transport, secure key management/known-host verification, Git LFS smudge/clean and locking, and an interactive three-way conflict UI are not included. DAP adapters remain user-provided and are not certified as Android-compatible. Python, Node.js and Java are not yet launched in a hardened isolated UID/service boundary. SAF live synchronization, OS file watching and crash-recovery journaling remain outstanding.
+
+The large-file pager is a bounded I/O primitive and is not yet wired into the editor's document model. CI emits an SPDX SBOM. Release signing is enabled when `ANDROID_KEYSTORE_PATH`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD` are supplied as protected build environment secrets; without them, the release APK is unsigned. Archive tasks use stable file ordering and timestamps, but clean-builder reproducibility comparison and signed provenance/attestation still require maintainer CI work. No Android build, instrumentation suite, or physical-device profiling was executed in this environment.

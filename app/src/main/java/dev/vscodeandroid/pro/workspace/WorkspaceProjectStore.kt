@@ -5,6 +5,8 @@ import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
 import java.io.File
 import java.io.FileOutputStream
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 
 /** SAF import plus app-private workspace storage used consistently by editor, runtimes and Git. */
 class WorkspaceProjectStore(private val appFiles: File) {
@@ -106,7 +108,7 @@ class WorkspaceProjectStore(private val appFiles: File) {
         fun visit(directory: File, prefix: String, depth: Int) {
             if (depth > 24 || result.size >= 10_000) return
             directory.listFiles()?.sortedBy { it.name.lowercase() }?.forEach { file ->
-                if (file.name == ".git" || file.name == ".tmp" || file.name == ".projects" || file.name == "lsp-stderr.log" || file.name.endsWith(".log")) return@forEach
+                if (file.name == ".git" || file.name == ".tmp" || file.name == ".projects" || file.name == "lsp-stderr.log" || file.name.endsWith(".log") || file.name.endsWith(".saving")) return@forEach
                 val relative = if (prefix.isEmpty()) file.name else "$prefix/${file.name}"
                 result += WorkspaceEntry(relative, file.isDirectory, if (file.isFile) file.length() else 0L)
                 if (file.isDirectory) visit(file, relative, depth + 1)
@@ -131,12 +133,8 @@ class WorkspaceProjectStore(private val appFiles: File) {
         return file.readText(Charsets.UTF_8)
     }
 
-    fun write(projectId: String, relativePath: String, content: String) {
-        val file = resolve(projectId, relativePath)
-        require(content.toByteArray(Charsets.UTF_8).size <= 4 * 1024 * 1024) { "Editor document exceeds 4 MiB" }
-        file.parentFile?.mkdirs()
-        file.writeText(content, Charsets.UTF_8)
-    }
+    fun write(projectId: String, relativePath: String, content: String) =
+        writeAtomically(projectId, relativePath, content)
 
     fun createFile(projectId: String, relativePath: String): File {
         val file = resolve(projectId, relativePath)
@@ -144,6 +142,68 @@ class WorkspaceProjectStore(private val appFiles: File) {
         file.parentFile?.mkdirs()
         require(file.createNewFile()) { "Unable to create file" }
         return file
+    }
+
+    /** Create a workspace directory without allowing traversal or replacement of existing entries. */
+    fun createDirectory(projectId: String, relativePath: String): File {
+        val directory = resolve(projectId, relativePath)
+        require(!directory.exists()) { "A file or folder with that name already exists" }
+        require(directory.mkdirs()) { "Unable to create folder" }
+        return directory
+    }
+
+    /**
+     * Move or rename an entry within one project. Canonical-path checks prevent traversal;
+     * moving a directory into itself (or one of its descendants) is rejected.
+     */
+    fun move(projectId: String, fromRelativePath: String, toRelativePath: String): File {
+        val source = resolve(projectId, fromRelativePath)
+        val destination = resolve(projectId, toRelativePath)
+        require(source.exists()) { "Source does not exist" }
+        require(!destination.exists()) { "Destination already exists" }
+        if (source.isDirectory) {
+            require(!destination.toPath().startsWith(source.toPath())) {
+                "A folder cannot be moved into itself"
+            }
+        }
+        destination.parentFile?.mkdirs()
+        require(destination.parentFile?.isDirectory == true) { "Unable to create destination folder" }
+        try {
+            Files.move(source.toPath(), destination.toPath(), StandardCopyOption.ATOMIC_MOVE)
+        } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
+            Files.move(source.toPath(), destination.toPath())
+        }
+        return destination
+    }
+
+    /** Delete a file or folder recursively, but never the project root. */
+    fun delete(projectId: String, relativePath: String) {
+        val target = resolve(projectId, relativePath)
+        require(target.exists()) { "Entry does not exist" }
+        require(target.deleteRecursively()) { "Unable to delete entry" }
+    }
+
+    /** Persist editor contents using a same-directory temporary file and atomic replacement. */
+    fun writeAtomically(projectId: String, relativePath: String, content: String) {
+        val destination = resolve(projectId, relativePath)
+        val encoded = content.toByteArray(Charsets.UTF_8)
+        require(encoded.size <= 4 * 1024 * 1024) { "Editor document exceeds 4 MiB" }
+        destination.parentFile?.mkdirs()
+        val temporary = File(destination.parentFile, ".${destination.name}.${System.nanoTime()}.saving")
+        try {
+            FileOutputStream(temporary).use { output ->
+                output.write(encoded)
+                output.fd.sync()
+            }
+            try {
+                Files.move(temporary.toPath(), destination.toPath(),
+                    StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+            } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
+                Files.move(temporary.toPath(), destination.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            }
+        } finally {
+            if (temporary.exists()) temporary.delete()
+        }
     }
 
     private fun projectRoot(projectId: String): File {

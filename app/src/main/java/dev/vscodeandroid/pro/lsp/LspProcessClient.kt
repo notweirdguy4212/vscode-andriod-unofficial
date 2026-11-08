@@ -25,6 +25,8 @@ class LspProcessClient(
 ) : Closeable {
     private val ids = AtomicInteger(1)
     private val pending = ConcurrentHashMap<Int, (JSONObject) -> Unit>()
+    private val registrations = ConcurrentHashMap<String, JSONObject>()
+    private val serverCapabilities = java.util.concurrent.atomic.AtomicReference(JSONObject())
     @Volatile private var io = Executors.newSingleThreadExecutor { task ->
         Thread(task, "lsp-reader-${executable.name}").apply { isDaemon = true }
     }
@@ -80,8 +82,12 @@ class LspProcessClient(
                         .put("synchronization", JSONObject().put("dynamicRegistration", false).put("willSave", false)
                             .put("willSaveWaitUntil", false).put("didSave", true))
                         .put("completion", JSONObject().put("dynamicRegistration", false)
-                            .put("completionItem", JSONObject().put("snippetSupport", false)
-                                .put("documentationFormat", org.json.JSONArray().put("markdown").put("plaintext"))))
+                            .put("completionItem", JSONObject().put("snippetSupport", true)
+                                .put("deprecatedSupport", true).put("preselectSupport", true)
+                                .put("insertReplaceSupport", true).put("labelDetailsSupport", true)
+                                .put("documentationFormat", org.json.JSONArray().put("markdown").put("plaintext"))
+                                .put("resolveSupport", JSONObject().put("properties", org.json.JSONArray()
+                                    .put("documentation").put("detail").put("additionalTextEdits").put("command").put("data")))))
                         .put("publishDiagnostics", JSONObject().put("relatedInformation", true)
                             .put("tagSupport", JSONObject().put("valueSet", org.json.JSONArray().put(1).put(2))))
                         .put("codeAction", JSONObject().put("dynamicRegistration", false)
@@ -91,12 +97,27 @@ class LspProcessClient(
                         .put("hover", JSONObject().put("contentFormat", org.json.JSONArray().put("markdown").put("plaintext")))
                         .put("definition", JSONObject()).put("references", JSONObject())
                         .put("rename", JSONObject().put("prepareSupport", true))
-                        .put("formatting", JSONObject()))
+                        .put("formatting", JSONObject())
+                        .put("semanticTokens", JSONObject()
+                            .put("dynamicRegistration", true)
+                            .put("requests", JSONObject().put("range", true).put("full", JSONObject().put("delta", true)))
+                            .put("tokenTypes", org.json.JSONArray().put("namespace").put("type").put("class").put("enum")
+                                .put("interface").put("struct").put("typeParameter").put("parameter").put("variable")
+                                .put("property").put("enumMember").put("event").put("function").put("method").put("macro")
+                                .put("keyword").put("modifier").put("comment").put("string").put("number").put("regexp").put("operator"))
+                            .put("tokenModifiers", org.json.JSONArray().put("declaration").put("definition").put("readonly")
+                                .put("static").put("deprecated").put("abstract").put("async").put("modification").put("documentation").put("defaultLibrary"))
+                            .put("formats", org.json.JSONArray().put("relative"))))
                     .put("workspace", JSONObject().put("applyEdit", true).put("workspaceFolders", true)
-                        .put("workspaceEdit", JSONObject().put("documentChanges", true))))) { response ->
+                        .put("configuration", true).put("didChangeWatchedFiles", JSONObject().put("dynamicRegistration", true))
+                        .put("workspaceEdit", JSONObject().put("documentChanges", true)
+                            .put("resourceOperations", org.json.JSONArray().put("create").put("rename").put("delete")))))) { response ->
                 try {
                     if (response.has("error")) initializeError.set(response.opt("error").toString())
-                    else notify("initialized", JSONObject())
+                    else {
+                        serverCapabilities.set(response.optJSONObject("result")?.optJSONObject("capabilities") ?: JSONObject())
+                        notify("initialized", JSONObject())
+                    }
                 } catch (failure: Exception) {
                     initializeError.set(failure.message ?: "initialized notification failed")
                 } finally {
@@ -128,6 +149,63 @@ class LspProcessClient(
         }
         return id
     }
+
+    /** Cancel an in-flight JSON-RPC request using the LSP cancellation notification. */
+    fun cancelRequest(id: Int): Boolean {
+        if (pending.remove(id) == null) return false
+        if (process?.isAlive == true) runCatching {
+            notify("$/cancelRequest", JSONObject().put("id", id))
+        }
+        return true
+    }
+
+    fun cancelAllRequests() {
+        pending.keys.toList().forEach(::cancelRequest)
+    }
+
+    fun capabilities(): JSONObject = JSONObject(serverCapabilities.get().toString())
+
+    fun semanticTokensFull(uri: String, callback: (JSONObject) -> Unit): Int =
+        request("textDocument/semanticTokens/full",
+            JSONObject().put("textDocument", JSONObject().put("uri", uri)), callback)
+
+    fun semanticTokensRange(uri: String, startLine: Int, startCharacter: Int,
+                            endLine: Int, endCharacter: Int, callback: (JSONObject) -> Unit): Int {
+        require(startLine >= 0 && startCharacter >= 0 && endLine >= startLine && endCharacter >= 0)
+        return request("textDocument/semanticTokens/range", JSONObject()
+            .put("textDocument", JSONObject().put("uri", uri))
+            .put("range", JSONObject()
+                .put("start", JSONObject().put("line", startLine).put("character", startCharacter))
+                .put("end", JSONObject().put("line", endLine).put("character", endCharacter))), callback)
+    }
+
+    fun semanticTokensFullDelta(uri: String, previousResultId: String,
+                                callback: (JSONObject) -> Unit): Int {
+        require(previousResultId.length in 1..512)
+        return request("textDocument/semanticTokens/full/delta", JSONObject()
+            .put("textDocument", JSONObject().put("uri", uri))
+            .put("previousResultId", previousResultId), callback)
+    }
+
+    private fun handleCapabilityRegistration(method: String, params: JSONObject) {
+        if (method == "client/registerCapability") {
+            val items = params.optJSONArray("registrations") ?: return
+            for (i in 0 until items.length()) {
+                val item = items.optJSONObject(i) ?: continue
+                val id = item.optString("id")
+                if (id.isNotBlank()) registrations[id] = item
+            }
+        } else {
+            val items = params.optJSONArray("unregistrations") ?: params.optJSONArray("unregisterations") ?: return
+            for (i in 0 until items.length()) {
+                val item = items.optJSONObject(i) ?: continue
+                registrations.remove(item.optString("id"))
+            }
+        }
+    }
+
+    fun registeredCapabilities(): List<JSONObject> =
+        registrations.values.map { JSONObject(it.toString()) }
 
     @Synchronized fun notify(method: String, params: JSONObject) {
         check(process?.isAlive == true && output != null) { "Language server is not running" }
@@ -283,6 +361,7 @@ class LspProcessClient(
                         } else if (method == "window/workDoneProgress/create") {
                             send(JSONObject().put("jsonrpc", "2.0").put("id", id).put("result", JSONObject.NULL))
                         } else if (method == "client/registerCapability" || method == "client/unregisterCapability") {
+                            handleCapabilityRegistration(method, params)
                             send(JSONObject().put("jsonrpc", "2.0").put("id", id).put("result", JSONObject.NULL))
                         } else {
                             send(JSONObject().put("jsonrpc", "2.0").put("id", id)
@@ -317,6 +396,7 @@ class LspProcessClient(
             process?.destroy()
             if (process?.waitFor(750, TimeUnit.MILLISECONDS) == false) process?.destroyForcibly()
         }
-        pending.clear(); io.shutdownNow(); input = null; output = null; process = null
+        pending.clear(); registrations.clear(); serverCapabilities.set(JSONObject())
+        io.shutdownNow(); input = null; output = null; process = null
     }
 }

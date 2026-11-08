@@ -8,3 +8,8 @@
 6. Validate Python and JavaScript DAP adapters on Android; add source maps, breakpoint persistence, launch configurations, exception breakpoints and richer variable/watch views.
 7. Add Android instrumentation, accessibility, performance, memory, lifecycle, fuzz, hostile-repository and security tests on physical ARM64 devices.
 8. Add release signing, reproducible builds, SBOM, dependency/license/vulnerability scanning, privacy review and Play policy checks.
+
+
+## 1.4.0 progress
+
+Workspace file operations and atomic persistence have been added in source. All other roadmap items remain open unless explicitly listed in `RELEASE-NOTES-1.4.0.md`; do not infer completion from the version bump.

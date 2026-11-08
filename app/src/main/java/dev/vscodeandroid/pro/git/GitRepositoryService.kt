@@ -233,6 +233,31 @@ class GitRepositoryService {
         "Merge status: ${result.mergeStatus}" + if (result.conflicts.isNotEmpty()) "\nConflicts: ${result.conflicts.keys.joinToString()}" else ""
     }
 
+    data class RebaseInfo(val status: String, val conflicts: List<String> = emptyList(),
+                          val currentCommit: String? = null)
+
+    /** Start a rebase onto a local branch or remote-tracking ref. */
+    fun rebase(root: File, upstream: String): RebaseInfo = open(root).use { git ->
+        validateRefName(upstream)
+        require(git.status().call().isClean) { "Commit or stash local changes before rebasing" }
+        val ref = git.repository.findRef(upstream) ?: git.repository.findRef("refs/remotes/$upstream")
+            ?: error("Rebase upstream not found: $upstream")
+        val result = git.rebase().setUpstream(ref.name).call()
+        RebaseInfo(result.status.name, result.conflicts ?: emptyList(), result.currentCommit?.name)
+    }
+
+    /** Continue only after all conflict paths have been staged as resolved. */
+    fun continueRebase(root: File): RebaseInfo = open(root).use { git ->
+        require(git.status().call().conflicting().isEmpty()) { "Resolve and stage every conflicted file first" }
+        val result = git.rebase().setOperation(org.eclipse.jgit.api.RebaseCommand.Operation.CONTINUE).call()
+        RebaseInfo(result.status.name, result.conflicts ?: emptyList(), result.currentCommit?.name)
+    }
+
+    fun abortRebase(root: File): RebaseInfo = open(root).use { git ->
+        val result = git.rebase().setOperation(org.eclipse.jgit.api.RebaseCommand.Operation.ABORT).call()
+        RebaseInfo(result.status.name, result.conflicts ?: emptyList(), result.currentCommit?.name)
+    }
+
     fun conflicts(root: File): List<String> = open(root).use { it.status().call().conflicting().sorted() }
 
     /** Stages a user-edited conflict file to mark it resolved. */

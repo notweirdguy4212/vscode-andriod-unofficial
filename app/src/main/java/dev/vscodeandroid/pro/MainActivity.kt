@@ -88,7 +88,7 @@ private fun ProWorkspace() {
     var projectMenuVisible by remember { mutableStateOf(false) }
     var createProjectDialog by remember { mutableStateOf(false) }
     var deleteProjectDialog by remember { mutableStateOf(false) }
-    var renameProjectDialog by remember { mutableStateOf(false) }
+    var renameProjectDialog by remember { mutableStateOf(false) }\n    var createFolderDialog by remember { mutableStateOf(false) }\n    var newFolderPath by remember { mutableStateOf("new-folder") }
     var newProjectName by remember { mutableStateOf("") }
     var projectIds by remember { mutableStateOf(emptyList<String>()) }
     var projectDisplayNames by remember { mutableStateOf(emptyMap<String, String>()) }
@@ -811,6 +811,32 @@ private fun ProWorkspace() {
         )
     }
 
+    if (createFolderDialog) {
+        AlertDialog(
+            onDismissRequest = { createFolderDialog = false },
+            title = { Text("Create workspace folder") },
+            text = {
+                OutlinedTextField(
+                    value = newFolderPath,
+                    onValueChange = { newFolderPath = it },
+                    label = { Text("Folder path") },
+                    singleLine = true
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    runCatching { workspaceStore.createDirectory(activeProjectId, newFolderPath.trim()) }
+                        .onSuccess {
+                            createFolderDialog = false
+                            scope.launch { workspaceEntries = withContext(Dispatchers.IO) { workspaceStore.listFiles(activeProjectId) } }
+                            status = "Folder created"
+                        }.onFailure { status = it.message ?: "Unable to create folder" }
+                }) { Text("Create") }
+            },
+            dismissButton = { TextButton(onClick = { createFolderDialog = false }) { Text("Cancel") } }
+        )
+    }
+
     if (deleteProjectDialog) {
         AlertDialog(
             onDismissRequest = { deleteProjectDialog = false },
@@ -941,13 +967,36 @@ private fun ProWorkspace() {
                             fontSize = 11.sp, modifier = Modifier.fillMaxWidth().clickable { activeId = tab.id }.padding(vertical = 6.dp))
                     }
                     Spacer(Modifier.height(12.dp))
-                    Text("WORKSPACE", color = EditorText, fontSize = 10.sp)
-                    workspaceEntries.forEach { entry ->
-                        Text((if (entry.directory) "▸ " else "  ") + entry.relativePath,
-                            color = if (entry.directory) Muted else EditorText, fontSize = 10.sp,
-                            modifier = Modifier.fillMaxWidth().clickable(enabled = !entry.directory) { openWorkspaceFile(entry.relativePath) }.padding(vertical = 5.dp))
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text("WORKSPACE", color = EditorText, fontSize = 10.sp, modifier = Modifier.weight(1f))
+                        IconButton(onClick = {
+                            scope.launch { workspaceEntries = withContext(Dispatchers.IO) { workspaceStore.listFiles(activeProjectId) } }
+                        }, modifier = Modifier.size(28.dp)) { Icon(Icons.Default.Refresh, "Refresh workspace", tint = Muted) }
                     }
-                    Spacer(Modifier.height(10.dp))
+                    workspaceEntries.forEach { entry ->
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Text((if (entry.directory) "▸ " else "  ") + entry.relativePath,
+                                color = if (entry.directory) Muted else EditorText, fontSize = 10.sp,
+                                modifier = Modifier.weight(1f).clickable(enabled = !entry.directory) { openWorkspaceFile(entry.relativePath) }.padding(vertical = 5.dp))
+                            if (!entry.directory) {
+                                IconButton(onClick = {
+                                    val project = activeProjectId
+                                    scope.launch {
+                                        runCatching { withContext(Dispatchers.IO) { workspaceStore.delete(project, entry.relativePath) } }
+                                            .onSuccess {
+                                                workspaceEntries = withContext(Dispatchers.IO) { workspaceStore.listFiles(project) }
+                                                status = "Deleted ${entry.relativePath}"
+                                            }.onFailure { status = it.message ?: "Unable to delete file" }
+                                    }
+                                }, modifier = Modifier.size(24.dp)) {
+                                    Icon(Icons.Default.Delete, "Delete ${entry.relativePath}", tint = Muted, modifier = Modifier.size(14.dp))
+                                }
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    Text("＋  NEW FOLDER", color = Color(0xFF9CDCFE), fontSize = 11.sp,
+                        modifier = Modifier.clickable { newFolderPath = "new-folder"; createFolderDialog = true }.padding(vertical = 6.dp))
                     Text("＋  NEW FILE", color = Color(0xFF9CDCFE), fontSize = 11.sp,
                         modifier = Modifier.clickable {
                             val name = "Untitled-${nextId}.txt"
